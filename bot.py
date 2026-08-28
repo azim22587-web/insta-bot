@@ -92,7 +92,7 @@ def get_action_keyboard(session_id: str, media_type: str = "video", current_mode
         row2.append(InlineKeyboardButton(text=orig_text, callback_data=f"mode:orig:{session_id}"))
     
     if media_type == "video":
-        row2.append(InlineKeyboardButton(text="🎵 Musiqasi (To'liq MP3)", callback_data=f"mode:audio:{session_id}"))
+        row2.append(InlineKeyboardButton(text="🎵 Musiqasi (MP3)", callback_data=f"mode:audio:{session_id}"))
 
     if row2:
         buttons.append(row2)
@@ -106,11 +106,11 @@ async def cmd_start(message: types.Message):
     text = (
         "👋 <b>Assalomu alaykum!</b>\n\n"
         "Men <b>Instagram</b>, <b>YouTube (Shorts/Video)</b> va <b>TikTok</b> dan videolarni eng yuqori sifatda yuklab, "
-        "ularni <b>1:1 to'rtburchak (kvadrat)</b> shaklga o'tkazuvchi va <b>to'liq musiqasini</b> topib beruvchi botman! 🎥📐🎵✨\n\n"
+        "ularni <b>1:1 to'rtburchak (kvadrat)</b> shaklga o'tkazuvchi va <b>asl musiqasini (MP3)</b> ajratib beruvchi botman! 🎥📐🎵✨\n\n"
         "🌟 <b>Asosiy Imkoniyatlar:</b>\n"
         "1️⃣ <b>Instagram & YouTube</b> havolalarini yuboring (Reels, Shorts, Video, Post).\n"
         "2️⃣ Video avtomatik tarzda <b>1:1 to'rtburchak (Blur fon)</b> shakliga keltiriladi.\n"
-        "3️⃣ <b>🎵 Musiqasi (To'liq MP3)</b> — videodagi musiqani to'liq 3-5 daqiqalik HQ MP3 holatida topib beradi.\n"
+        "3️⃣ <b>🎵 Musiqasi (MP3)</b> — videodagi asl musiqani toza HQ MP3 formatida ajratib beradi.\n"
         "4️⃣ <b>✂️ Qirqish (Crop)</b> yoki <b>🎞 Asl holatda</b> formatlarini ham tanlash mumkin.\n"
         "5️⃣ Istalgan video yoki rasmni to'g'ridan-to'g'ri yuborsangiz ham 1:1 kvadrat qilib beradi.\n\n"
         "🚀 <i>Havolani yuboring yoki video/rasm tashlang!</i>"
@@ -495,36 +495,27 @@ async def handle_mode_callback(query: CallbackQuery, bot: Bot):
     duration = float(session.get('duration', 0.0) or 0.0)
 
     if mode == "audio":
-        await query.answer("🔍 Musiqa aniqlanmoqda va to'liq yuklab olinmoqda...")
-        status = await query.message.reply("🔍 <b>Musiqa aniqlanmoqda va to'liq yuklab olinmoqda...</b>", parse_mode=ParseMode.HTML)
+        await query.answer("🎵 Asl musiqa ajratib olinmoqda...")
+        status = await query.message.reply("🎵 <b>Videodagi asl musiqa (HQ MP3) ajratib olinmoqda...</b>", parse_mode=ParseMode.HTML)
         
         try:
             music_data = await get_full_music_for_video(orig_file, safe_title, session_id, author_hint=uploader)
             if not music_data or not os.path.exists(music_data['file_path']):
-                await status.edit_text("❌ Musiqani yuklab bo'lmadi.")
+                await status.edit_text("❌ Musiqani ajratib bo'lmadi.")
                 return
 
             audio_file = music_data['file_path']
             title = music_data['title']
             artist = music_data['artist']
-            is_full = music_data.get('is_full', False)
             dur = int(music_data.get('duration', 0))
 
             audio_input = FSInputFile(audio_file)
-            
-            if is_full:
-                caption = (
-                    f"🎵 <b>{html.escape(title)}</b>\n"
-                    f"👤 <b>Ijrochi:</b> {html.escape(artist)}\n"
-                    f"🔥 <i>To'liq musiqa (Full HQ MP3)</i>\n"
-                    f"✨ @{bot_user.username}"
-                )
-            else:
-                caption = (
-                    f"🎵 <b>{html.escape(title)}</b>\n"
-                    f"👤 {html.escape(artist)}\n"
-                    f"✨ @{bot_user.username}"
-                )
+            caption = (
+                f"🎵 <b>{html.escape(title)}</b>\n"
+                f"👤 <b>Muallif / Kanal:</b> {html.escape(artist)}\n"
+                f"🔥 <i>Videoning asl musiqasi (HQ MP3)</i>\n"
+                f"✨ @{bot_user.username}"
+            )
 
             await query.message.answer_audio(
                 audio=audio_input,
@@ -538,8 +529,8 @@ async def handle_mode_callback(query: CallbackQuery, bot: Bot):
             await status.delete()
 
         except Exception as e:
-            logger.error(f"Audio yuklashda xatolik: {e}", exc_info=True)
-            await status.edit_text(f"❌ Musiqani yuklashda xatolik: {html.escape(str(e))}")
+            logger.error(f"Audio ajratishda xatolik: {e}", exc_info=True)
+            await status.edit_text(f"❌ Musiqani ajratishda xatolik: {html.escape(str(e))}")
         return
 
     await query.answer("⏳ Format tayyorlanmoqda...")

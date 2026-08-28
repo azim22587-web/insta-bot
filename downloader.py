@@ -1,12 +1,17 @@
 import asyncio
+import logging
 import os
 import re
+import time
 import uuid
-import logging
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple, Callable
+import requests
 import yt_dlp
-from config import DOWNLOADS_DIR, FFMPEG_PATH
+import instaloader
+
+from config import DOWNLOADS_DIR, FFMPEG_PATH, COOKIES_FILE
+from video_processor import get_video_duration
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +38,14 @@ TIKTOK_REGEX = re.compile(
 )
 
 
+def extract_instagram_shortcode(url_or_text: str) -> Optional[str]:
+    """Instagram havolasidan post/reel shortcode ini ajratib oladi"""
+    match = INSTAGRAM_REGEX.search(url_or_text)
+    if match:
+        return match.group(1)
+    return None
+
+
 def detect_supported_url(text: str) -> Optional[Tuple[str, str]]:
     """
     Matn ichidan qo'llab-quvvatlanadigan havolani va uning turini aniqlaydi.
@@ -41,6 +54,9 @@ def detect_supported_url(text: str) -> Optional[Tuple[str, str]]:
     ig_match = INSTAGRAM_REGEX.search(text)
     if ig_match:
         code = ig_match.group(1)
+        # Agar URL ichida reel yoki p bo'lsa
+        if "/p/" in text:
+            return "instagram", f"https://www.instagram.com/p/{code}/"
         return "instagram", f"https://www.instagram.com/reel/{code}/"
 
     ig_stories_match = INSTAGRAM_STORIES_REGEX.search(text)
@@ -74,15 +90,121 @@ def extract_instagram_url(text: str) -> Optional[str]:
     return None
 
 
-def _download_media_sync(
+def _download_stream_file(
+    url: str,
+    dest_path: Path,
+    progress_callback: Optional[Callable[[int, str], None]] = None
+) -> bool:
+    """To'g'ridan-to'g'ri CDN havolasidan tezkor oqimli yuklab olish"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://www.instagram.com/',
+        }
+        with requests.get(url, stream=True, timeout=45, headers=headers) as r:
+            r.raise_for_status()
+            total_size = int(r.headers.get('content-length', 0))
+            downloaded = 0
+            start_time = time.time()
+            with open(dest_path, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=128 * 1024):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if progress_callback and total_size > 0:
+                            percent = min(99, max(1, int(downloaded / total_size * 100)))
+                            elapsed = time.time() - start_time
+                            speed_mb = (downloaded / (1024 * 1024) / elapsed) if elapsed > 0 else 0.0
+                            progress_callback(percent, f"{speed_mb:.1f} MB/s")
+        return dest_path.exists() and dest_path.stat().st_size > 0
+    except Exception as e:
+        logger.error(f"Faylni oqimli yuklab olishda xatolik: {e}")
+        return False
+
+
+def _download_instagram_instaloader(
+    shortcode: str,
+    output_id: str,
+    progress_callback: Optional[Callable[[int, str], None]] = None
+) -> Optional[Dict[str, Any]]:
+    """Instaloader orqali Instagram Reels/Post/Karuselni yuklab olish (Server IP bloklariga chidamli)"""
+    try:
+        loader = instaloader.Instaloader(
+            download_pictures=False,
+            download_videos=False,
+            download_comments=False,
+            save_metadata=False,
+            quiet=True
+        )
+        post = instaloader.Post.from_shortcode(loader.context, shortcode)
+        if not post:
+            return None
+
+        items: List[Dict[str, Any]] = []
+        raw_caption = post.caption or ''
+        clean_title = ' '.join(raw_caption.split()[:12]) if raw_caption else "Instagram Video"
+        if len(clean_title) > 85:
+            clean_title = clean_title[:82] + "..."
+        uploader = post.owner_username or "Instagram"
+
+        if post.typename == 'GraphSidecar':
+            # Karusel post (bir nechta rasm/video)
+            for idx, node in enumerate(post.get_sidecar_nodes(), 1):
+                if node.is_video:
+                    dest = DOWNLOADS_DIR / f"{output_id}_{idx:02d}.mp4"
+                    success = _download_stream_file(node.video_url, dest, progress_callback)
+                    if success:
+                        items.append({'file_path': str(dest), 'is_video': True, 'ext': '.mp4'})
+                else:
+                    dest = DOWNLOADS_DIR / f"{output_id}_{idx:02d}.jpg"
+                    success = _download_stream_file(node.display_url, dest, progress_callback)
+                    if success:
+                        items.append({'file_path': str(dest), 'is_video': False, 'ext': '.jpg'})
+        elif post.is_video:
+            # Video yoki Reel
+            dest = DOWNLOADS_DIR / f"{output_id}_01.mp4"
+            success = _download_stream_file(post.video_url, dest, progress_callback)
+            if success:
+                items.append({'file_path': str(dest), 'is_video': True, 'ext': '.mp4'})
+        else:
+            # Rasm
+            dest = DOWNLOADS_DIR / f"{output_id}_01.jpg"
+            success = _download_stream_file(post.url, dest, progress_callback)
+            if success:
+                items.append({'file_path': str(dest), 'is_video': False, 'ext': '.jpg'})
+
+        if not items:
+            return None
+
+        # Davomiylikni aniqlash
+        duration = 0.0
+        if items[0]['is_video']:
+            duration = get_video_duration(items[0]['file_path'])
+
+        return {
+            'items': items,
+            'title': clean_title,
+            'uploader': uploader,
+            'duration': float(duration),
+            'platform': 'instagram',
+            'source_url': f"https://www.instagram.com/reel/{shortcode}/"
+        }
+    except Exception as e:
+        logger.warning(f"Instaloader bilan yuklab olishda xatolik ({shortcode}): {e}")
+        return None
+
+
+def _download_media_ytdlp(
     url: str,
     output_id: str,
     platform: str,
     progress_callback: Optional[Callable[[int, str], None]] = None
 ) -> Optional[Dict[str, Any]]:
-    """Sinxron yt-dlp yuklash funksiyasi"""
+    """yt-dlp orqali yuklash funksiyasi (YouTube, TikTok va Instagram uchun)"""
     out_template = str(DOWNLOADS_DIR / f"{output_id}_%(autonumber)02d.%(ext)s")
-    
+
     # YouTube uchun maxsus 720p/1080p tez yuklanuvchi format
     format_selector = (
         'bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/best[ext=mp4][height<=720]/best[height<=720]/best'
@@ -114,6 +236,9 @@ def _download_media_sync(
             'Accept-Language': 'en-US,en;q=0.9',
         }
     }
+
+    if COOKIES_FILE:
+        ydl_opts['cookiefile'] = COOKIES_FILE
 
     if "youtube" in platform:
         ydl_opts['match_filter'] = yt_dlp.utils.match_filter_func("duration <= 900")
@@ -173,12 +298,40 @@ def _download_media_sync(
         return None
 
 
+def _download_media_sync(
+    url: str,
+    output_id: str,
+    platform: str,
+    progress_callback: Optional[Callable[[int, str], None]] = None
+) -> Optional[Dict[str, Any]]:
+    """Sinxron yuklash funksiyasi (Instagram uchun multi-engine, YouTube va TikTok uchun yt-dlp)"""
+    if platform == "instagram":
+        # 1-qadam: Instaloader orqali urinib ko'rish (Serverlar uchun eng ishonchli)
+        shortcode = extract_instagram_shortcode(url)
+        if shortcode:
+            logger.info(f"Instagram: Instaloader orqali yuklanmoqda ({shortcode})...")
+            res = _download_instagram_instaloader(shortcode, output_id, progress_callback)
+            if res and res.get('items'):
+                return res
+
+        # 2-qadam: yt-dlp orqali urinib ko'rish
+        logger.info(f"Instagram: yt-dlp orqali urinib ko'rilmoqda ({url})...")
+        res_yt = _download_media_ytdlp(url, output_id, platform, progress_callback)
+        if res_yt and res_yt.get('items'):
+            return res_yt
+
+        return None
+    else:
+        # YouTube va TikTok uchun
+        return _download_media_ytdlp(url, output_id, platform, progress_callback)
+
+
 async def download_media(
     url: str,
     platform: str = "generic",
     progress_callback: Optional[Callable[[int, str], None]] = None
 ) -> Optional[Dict[str, Any]]:
-    """Istalgan platformadan media yuklab olish"""
+    """Istalgan platformadan media yuklab olish (Asinxron)"""
     prefix = "yt" if "youtube" in platform else ("tt" if platform == "tiktok" else "ig")
     output_id = f"{prefix}_{uuid.uuid4().hex[:10]}"
     return await asyncio.to_thread(_download_media_sync, url, output_id, platform, progress_callback)

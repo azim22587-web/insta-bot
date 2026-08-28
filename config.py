@@ -28,3 +28,11 @@ except Exception:
 
 # Maksimal video hajmi (Telegram bot uchun 50 MB limit)
 MAX_FILE_SIZE_MB = 50
+
+# Cookies fayli (mavjud bo'lsa server IP bloklarini chetlab o'tish uchun)
+COOKIES_FILE = None
+for candidate in ["cookies.txt", "instagram_cookies.txt", "www.instagram.com_cookies.txt"]:
+    candidate_path = BASE_DIR / candidate
+    if candidate_path.exists() and candidate_path.is_file():
+        COOKIES_FILE = str(candidate_path)
+        break

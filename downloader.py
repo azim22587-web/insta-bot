@@ -307,9 +307,9 @@ def _download_media_ytdlp(
     """yt-dlp orqali yuklash funksiyasi (Server IP bloklariga chidamli multi-client bilan)"""
     out_template = str(DOWNLOADS_DIR / f"{output_id}_%(autonumber)02d.%(ext)s")
 
-    # YouTube uchun maxsus format
+    # YouTube va boshqa platformalar uchun ishonchli format
     format_selector = (
-        'bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/best[ext=mp4][height<=720]/best[height<=720]/best'
+        'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best'
         if "youtube" in platform
         else 'best/bestvideo+bestaudio'
     )
@@ -326,11 +326,11 @@ def _download_media_ytdlp(
 
     # YouTube uchun sinab ko'riladigan client kombinatsiyalari
     client_strategies = [
-        ['android', 'ios', 'tv_embedded', 'mweb'],
+        ['ios', 'android', 'tv'],
         ['android'],
         ['ios'],
-        ['tv_embedded'],
-        ['mweb', 'web_creator'],
+        ['tv'],
+        ['mweb', 'web'],
     ] if "youtube" in platform else [['default']]
 
     for clients in client_strategies:

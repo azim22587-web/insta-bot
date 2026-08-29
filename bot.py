@@ -215,7 +215,8 @@ async def handle_text_message(message: types.Message, bot: Bot):
                     "title": safe_title,
                     "uploader": uploader,
                     "platform": platform_name,
-                    "duration": duration
+                    "duration": duration,
+                    "music_info": info.get('music_info', {})
                 }
 
                 try:
@@ -497,11 +498,20 @@ async def handle_mode_callback(query: CallbackQuery, bot: Bot):
     duration = float(session.get('duration', 0.0) or 0.0)
 
     if mode == "audio":
-        await query.answer("🎵 Asl musiqa ajratib olinmoqda...")
-        status = await query.message.reply("🎵 <b>Videodagi asl musiqa (HQ MP3) ajratib olinmoqda...</b>", parse_mode=ParseMode.HTML)
+        await query.answer("🎵 Musiqa qidirilmoqda va yuklanmoqda...")
+        status = await query.message.reply("🎵 <b>To'liq musiqa qidirilmoqda va tayyorlanmoqda...</b>", parse_mode=ParseMode.HTML)
         
         try:
-            music_data = await get_full_music_for_video(orig_file, safe_title, session_id, author_hint=uploader)
+            music_info = session.get("music_info") or {}
+            music_data = await get_full_music_for_video(
+                video_path=orig_file,
+                post_title=safe_title,
+                session_id=session_id,
+                author_hint=uploader,
+                direct_music_url=music_info.get('play_url', ''),
+                music_title_hint=music_info.get('title', ''),
+                music_artist_hint=music_info.get('artist', '')
+            )
             if not music_data or not os.path.exists(music_data['file_path']):
                 await status.edit_text("❌ Musiqani ajratib bo'lmadi.")
                 return
@@ -510,12 +520,17 @@ async def handle_mode_callback(query: CallbackQuery, bot: Bot):
             title = music_data['title']
             artist = music_data['artist']
             dur = int(music_data.get('duration', 0))
+            is_full = music_data.get('is_full', False)
 
             audio_input = FSInputFile(audio_file)
+            dur_text = f"⏱ <b>Davomiyligi:</b> {dur // 60:02d}:{dur % 60:02d}\n" if dur > 0 else ""
+            status_badge = "🎧 <b>To'liq format (Full MP3)</b>" if is_full else "🔥 <b>Asl audio (HQ MP3)</b>"
+
             caption = (
                 f"🎵 <b>{html.escape(title)}</b>\n"
-                f"👤 <b>Muallif / Kanal:</b> {html.escape(artist)}\n"
-                f"🔥 <i>Videoning asl musiqasi (HQ MP3)</i>\n"
+                f"👤 <b>Ijrochi / Kanal:</b> {html.escape(artist)}\n"
+                f"{status_badge}\n"
+                f"{dur_text}"
                 f"✨ @{bot_user.username}"
             )
 
@@ -690,9 +705,10 @@ async def handle_mode_callback(query: CallbackQuery, bot: Bot):
 
 
 async def start_dummy_server():
-    """Render / Koyeb kabi bepul serverlar uchun health check portini ochish"""
-    port = int(os.getenv("PORT", 0))
-    if port > 0:
+    """Render / Koyeb kabi bulutli serverlar uchun health check portini ochish"""
+    port_str = os.getenv("PORT", "8000")
+    try:
+        port = int(port_str)
         from aiohttp import web
         app = web.Application()
         async def handle_ping(request):
@@ -704,6 +720,22 @@ async def start_dummy_server():
         site = web.TCPSite(runner, "0.0.0.0", port)
         await site.start()
         print(f"🌐 Health-check server ishga tushdi (Port: {port})")
+    except Exception as e:
+        logger.warning(f"Health-check serverni yoqishda xatolik (e'tibor bermasa ham bo'ladi): {e}")
+
+
+async def keep_alive_ping(app_url: str):
+    """Bulutli server (Koyeb/Render) uxlab qolmasligi uchun har 4 daqiqada o'zini uyg'otib turish"""
+    await asyncio.sleep(10)
+    import aiohttp
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
+                async with session.get(app_url, timeout=10) as resp:
+                    logger.info(f"Keep-alive ping yuborildi: {resp.status}")
+            except Exception as e:
+                logger.debug(f"Keep-alive xatosi: {e}")
+            await asyncio.sleep(240)  # Har 4 daqiqada
 
 
 async def main():
@@ -717,6 +749,13 @@ async def main():
 
     # Bepul serverlar uchun health-check portini yoqish
     await start_dummy_server()
+
+    # Agar Koyeb yoki Render URL ko'rsatilgan bo'lsa, o'zini uxlab qolishdan saqlash
+    app_url = os.getenv("APP_URL") or os.getenv("KOYEB_PUBLIC_DOMAIN")
+    if app_url:
+        if not app_url.startswith("http"):
+            app_url = f"https://{app_url}"
+        asyncio.create_task(keep_alive_ping(app_url))
 
     session = AiohttpSession(timeout=300.0)
     bot = Bot(token=BOT_TOKEN, session=session)

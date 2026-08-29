@@ -205,7 +205,8 @@ def _download_tiktok_tikwm(
     output_id: str,
     progress_callback: Optional[Callable[[int, str], None]] = None
 ) -> Optional[Dict[str, Any]]:
-    """TikWM API orqali TikTok video/rasmlarini yuklab olish (Server IP bloklariga 100% chidamli)"""
+    """TikWM API va bir nechta muqobil API lar orqali TikTok yuklash"""
+    # 1. TikWM API
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
@@ -215,55 +216,86 @@ def _download_tiktok_tikwm(
             'https://www.tikwm.com/api/',
             data={'url': url, 'count': 12, 'cursor': 0, 'web': 1, 'hd': 1},
             headers=headers,
-            timeout=25
+            timeout=15
         )
-        if res.status_code != 200:
-            return None
-        data = res.json()
-        if data.get('code') != 0 or 'data' not in data:
-            return None
+        if res.status_code == 200:
+            data = res.json()
+            if data.get('code') == 0 and 'data' in data:
+                item_data = data['data']
+                raw_title = item_data.get('title') or 'TikTok Video'
+                title = raw_title.strip()
+                if len(title) > 90:
+                    title = title[:87] + "..."
+                uploader = item_data.get('author', {}).get('nickname') or item_data.get('author', {}).get('unique_id') or 'TikTok'
+                duration = float(item_data.get('duration', 0.0))
 
-        item_data = data['data']
-        raw_title = item_data.get('title') or 'TikTok Video'
-        title = raw_title.strip()
-        if len(title) > 90:
-            title = title[:87] + "..."
-        uploader = item_data.get('author', {}).get('nickname') or item_data.get('author', {}).get('unique_id') or 'TikTok'
-        duration = float(item_data.get('duration', 0.0))
+                items: List[Dict[str, Any]] = []
+                images = item_data.get('images')
+                if images and isinstance(images, list):
+                    for idx, img_url in enumerate(images, 1):
+                        dest = DOWNLOADS_DIR / f"{output_id}_{idx:02d}.jpg"
+                        if _download_stream_file(img_url, dest, progress_callback):
+                            items.append({'file_path': str(dest), 'is_video': False, 'ext': '.jpg'})
+                else:
+                    play_url = item_data.get('hdplay') or item_data.get('play') or item_data.get('wmplay')
+                    if play_url:
+                        if not play_url.startswith('http'):
+                            play_url = 'https://www.tikwm.com' + play_url
+                        dest = DOWNLOADS_DIR / f"{output_id}_01.mp4"
+                        if _download_stream_file(play_url, dest, progress_callback):
+                            items.append({'file_path': str(dest), 'is_video': True, 'ext': '.mp4'})
 
-        items: List[Dict[str, Any]] = []
+                music_info = item_data.get('music_info', {}) or {}
+                music_title = music_info.get('title') or ''
+                music_author = music_info.get('author') or ''
+                music_play_url = music_info.get('play') or item_data.get('music') or ''
+                if music_play_url and not music_play_url.startswith('http'):
+                    music_play_url = 'https://www.tikwm.com' + music_play_url
 
-        # 1. Rasm slaydlari (agar mavjud bo'lsa)
-        images = item_data.get('images')
-        if images and isinstance(images, list):
-            for idx, img_url in enumerate(images, 1):
-                dest = DOWNLOADS_DIR / f"{output_id}_{idx:02d}.jpg"
-                if _download_stream_file(img_url, dest, progress_callback):
-                    items.append({'file_path': str(dest), 'is_video': False, 'ext': '.jpg'})
-        else:
-            # 2. Video (HD yoki standart watermarksiz)
-            play_url = item_data.get('hdplay') or item_data.get('play') or item_data.get('wmplay')
-            if play_url:
-                if not play_url.startswith('http'):
-                    play_url = 'https://www.tikwm.com' + play_url
-                dest = DOWNLOADS_DIR / f"{output_id}_01.mp4"
-                if _download_stream_file(play_url, dest, progress_callback):
-                    items.append({'file_path': str(dest), 'is_video': True, 'ext': '.mp4'})
-
-        if not items:
-            return None
-
-        return {
-            'items': items,
-            'title': title,
-            'uploader': uploader,
-            'duration': duration,
-            'platform': 'tiktok',
-            'source_url': url
-        }
+                if items:
+                    return {
+                        'items': items,
+                        'title': title,
+                        'uploader': uploader,
+                        'duration': duration,
+                        'platform': 'tiktok',
+                        'source_url': url,
+                        'music_info': {
+                            'title': music_title,
+                            'artist': music_author,
+                            'play_url': music_play_url
+                        }
+                    }
     except Exception as e:
-        logger.warning(f"TikWM orqali TikTok yuklashda xatolik ({url}): {e}")
-        return None
+        logger.warning(f"TikWM xatosi: {e}")
+
+    # 2. Muqobil API: TikSave / SSSTik fallback
+    try:
+        ss_res = requests.get(f"https://api.tiklydown.eu.org/api/download?url={url}", timeout=15)
+        if ss_res.status_code == 200:
+            sdata = ss_res.json()
+            video_url = sdata.get('video', {}).get('noWatermark') or sdata.get('video', {}).get('watermark')
+            music_url = sdata.get('music', {}).get('play_url') or ''
+            if video_url:
+                dest = DOWNLOADS_DIR / f"{output_id}_01.mp4"
+                if _download_stream_file(video_url, dest, progress_callback):
+                    return {
+                        'items': [{'file_path': str(dest), 'is_video': True, 'ext': '.mp4'}],
+                        'title': sdata.get('title', 'TikTok Video')[:85],
+                        'uploader': sdata.get('author', {}).get('name', 'TikTok'),
+                        'duration': 0.0,
+                        'platform': 'tiktok',
+                        'source_url': url,
+                        'music_info': {
+                            'title': sdata.get('music', {}).get('title', ''),
+                            'artist': sdata.get('music', {}).get('author', ''),
+                            'play_url': music_url
+                        }
+                    }
+    except Exception as e:
+        logger.warning(f"Tiklydown xatosi: {e}")
+
+    return None
 
 
 def _download_media_ytdlp(
@@ -272,10 +304,10 @@ def _download_media_ytdlp(
     platform: str,
     progress_callback: Optional[Callable[[int, str], None]] = None
 ) -> Optional[Dict[str, Any]]:
-    """yt-dlp orqali yuklash funksiyasi (YouTube, TikTok va Instagram uchun)"""
+    """yt-dlp orqali yuklash funksiyasi (Server IP bloklariga chidamli multi-client bilan)"""
     out_template = str(DOWNLOADS_DIR / f"{output_id}_%(autonumber)02d.%(ext)s")
 
-    # YouTube uchun maxsus 720p/1080p tez yuklanuvchi format
+    # YouTube uchun maxsus format
     format_selector = (
         'bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/best[ext=mp4][height<=720]/best[height<=720]/best'
         if "youtube" in platform
@@ -292,86 +324,110 @@ def _download_media_ytdlp(
                 speed_mb = (speed / (1024 * 1024)) if speed else 0.0
                 progress_callback(percent, f"{speed_mb:.1f} MB/s")
 
-    ydl_opts = {
-        'format': format_selector,
-        'outtmpl': out_template,
-        'quiet': True,
-        'no_warnings': True,
-        'noplaylist': True,
-        'socket_timeout': 30,
-        'ffmpeg_location': FFMPEG_PATH,
-        'progress_hooks': [ydl_hook] if progress_callback else [],
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'ios', 'web_safari', 'mweb'],
-                'player_skip': ['webpage', 'configs'],
+    # YouTube uchun sinab ko'riladigan client kombinatsiyalari
+    client_strategies = [
+        ['android', 'ios', 'tv_embedded', 'mweb'],
+        ['android'],
+        ['ios'],
+        ['tv_embedded'],
+        ['mweb', 'web_creator'],
+    ] if "youtube" in platform else [['default']]
+
+    for clients in client_strategies:
+        ydl_opts = {
+            'format': format_selector,
+            'outtmpl': out_template,
+            'quiet': True,
+            'no_warnings': True,
+            'noplaylist': True,
+            'socket_timeout': 30,
+            'geo_bypass': True,
+            'nocheckcertificate': True,
+            'ffmpeg_location': FFMPEG_PATH,
+            'progress_hooks': [ydl_hook] if progress_callback else [],
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+                'Accept-Language': 'en-US,en;q=0.9',
             }
-        },
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9',
         }
-    }
 
-    if COOKIES_FILE:
-        ydl_opts['cookiefile'] = COOKIES_FILE
-
-    if "youtube" in platform:
-        ydl_opts['match_filter'] = yt_dlp.utils.match_filter_func("duration <= 900")
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            if not info:
-                return None
-
-            raw_title = info.get('title') or ('YouTube Video' if 'youtube' in platform else 'Instagram Post')
-            title = raw_title.strip()
-            if len(title) > 90:
-                title = title[:87] + "..."
-
-            duration = info.get('duration') or 0.0
-            uploader = info.get('uploader') or info.get('channel') or info.get('creator') or ''
-
-            # Yuklangan barcha fayllarni topish
-            found_files = list(DOWNLOADS_DIR.glob(f"{output_id}*.*"))
-
-            if not found_files:
-                single_template = str(DOWNLOADS_DIR / f"{output_id}.%(ext)s")
-                ydl_opts['outtmpl'] = single_template
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl_single:
-                    info = ydl_single.extract_info(url, download=True)
-                    found_files = list(DOWNLOADS_DIR.glob(f"{output_id}.*"))
-
-            if not found_files:
-                return None
-
-            items = []
-            for f in sorted(found_files, key=lambda x: str(x)):
-                ext = f.suffix.lower()
-                if ext in ('.part', '.ytdl', '.json', '.info'):
-                    continue
-                is_video = ext in ('.mp4', '.mkv', '.webm', '.mov', '.avi', '.flv')
-                items.append({
-                    'file_path': str(f),
-                    'is_video': is_video,
-                    'ext': ext
-                })
-
-            if not items:
-                return None
-
-            return {
-                'items': items,
-                'title': title,
-                'uploader': uploader,
-                'duration': float(duration),
-                'platform': platform,
-                'source_url': url
+        if "youtube" in platform:
+            ydl_opts['extractor_args'] = {
+                'youtube': {
+                    'player_client': clients,
+                    'player_skip': ['webpage', 'configs'],
+                }
             }
-    except Exception as e:
-        logger.error(f"Media yuklab olishda xatolik ({platform} - {url}): {e}")
-        return None
+            ydl_opts['match_filter'] = yt_dlp.utils.match_filter_func("duration <= 900")
+
+        if COOKIES_FILE:
+            ydl_opts['cookiefile'] = COOKIES_FILE
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                if not info:
+                    continue
+
+                raw_title = info.get('title') or ('YouTube Video' if 'youtube' in platform else 'Instagram Post')
+                title = raw_title.strip()
+                if len(title) > 90:
+                    title = title[:87] + "..."
+
+                duration = info.get('duration') or 0.0
+                uploader = info.get('uploader') or info.get('channel') or info.get('creator') or ''
+
+                # Musiqa metadata
+                track_title = info.get('track') or ''
+                track_artist = info.get('artist') or ''
+
+                # Yuklangan barcha fayllarni topish
+                found_files = list(DOWNLOADS_DIR.glob(f"{output_id}*.*"))
+
+                if not found_files:
+                    single_template = str(DOWNLOADS_DIR / f"{output_id}.%(ext)s")
+                    ydl_opts['outtmpl'] = single_template
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl_single:
+                        info = ydl_single.extract_info(url, download=True)
+                        found_files = list(DOWNLOADS_DIR.glob(f"{output_id}.*"))
+
+                if not found_files:
+                    continue
+
+                items = []
+                for f in sorted(found_files, key=lambda x: str(x)):
+                    ext = f.suffix.lower()
+                    if ext in ('.part', '.ytdl', '.json', '.info'):
+                        continue
+                    is_video = ext in ('.mp4', '.mkv', '.webm', '.mov', '.avi', '.flv')
+                    items.append({
+                        'file_path': str(f),
+                        'is_video': is_video,
+                        'ext': ext
+                    })
+
+                if not items:
+                    continue
+
+                return {
+                    'items': items,
+                    'title': title,
+                    'uploader': uploader,
+                    'duration': float(duration),
+                    'platform': platform,
+                    'source_url': url,
+                    'music_info': {
+                        'title': track_title,
+                        'artist': track_artist,
+                        'play_url': ''
+                    }
+                }
+        except Exception as e:
+            logger.warning(f"yt-dlp urinishda xatolik (clients={clients}): {e}")
+            continue
+
+    logger.error(f"Media yuklab olish barcha strategiyalar bo'yicha muvaffaqiyatsiz bo'ldi ({platform} - {url})")
+    return None
 
 
 def _download_media_sync(

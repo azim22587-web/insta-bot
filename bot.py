@@ -101,14 +101,15 @@ def get_action_keyboard(session_id: str, media_type: str = "video", current_mode
 
 
 @dp.message(CommandStart())
+@dp.message(F.text.in_(["!start", "/start", ".start"]))
 async def cmd_start(message: types.Message):
-    """Start buyrug'i"""
+    """Start buyrug'i (/start yoki !start)"""
     text = (
         "👋 <b>Assalomu alaykum!</b>\n\n"
         "Men <b>Instagram</b>, <b>YouTube (Shorts/Video)</b> va <b>TikTok</b> dan videolarni eng yuqori sifatda yuklab, "
         "ularni <b>1:1 to'rtburchak (kvadrat)</b> shaklga o'tkazuvchi va <b>asl musiqasini (MP3)</b> ajratib beruvchi botman! 🎥📐🎵✨\n\n"
         "🌟 <b>Asosiy Imkoniyatlar:</b>\n"
-        "1️⃣ <b>Instagram & YouTube</b> havolalarini yuboring (Reels, Shorts, Video, Post).\n"
+        "1️⃣ <b>Instagram, YouTube, TikTok</b> havolalarini yuboring.\n"
         "2️⃣ Video avtomatik tarzda <b>1:1 to'rtburchak (Blur fon)</b> shakliga keltiriladi.\n"
         "3️⃣ <b>🎵 Musiqasi (MP3)</b> — videodagi asl musiqani toza HQ MP3 formatida ajratib beradi.\n"
         "4️⃣ <b>✂️ Qirqish (Crop)</b> yoki <b>🎞 Asl holatda</b> formatlarini ham tanlash mumkin.\n"
@@ -119,8 +120,9 @@ async def cmd_start(message: types.Message):
 
 
 @dp.message(Command("help"))
+@dp.message(F.text.in_(["!help", "/help", ".help", "!yordam", "/yordam"]))
 async def cmd_help(message: types.Message):
-    """Yordam buyrug'i"""
+    """Yordam buyrug'i (/help yoki !help)"""
     text = (
         "ℹ️ <b>Yordam va qo'llanma:</b>\n\n"
         "🔹 <b>Qo'llab-quvvatlanadigan platformalar:</b>\n"

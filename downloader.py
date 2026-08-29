@@ -101,9 +101,13 @@ def _download_stream_file(
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
             'Accept': '*/*',
             'Accept-Language': 'en-US,en;q=0.9',
-            'Referer': 'https://www.instagram.com/',
         }
-        with requests.get(url, stream=True, timeout=45, headers=headers) as r:
+        if 'instagram' in url or 'cdninstagram' in url or 'fbcdn' in url:
+            headers['Referer'] = 'https://www.instagram.com/'
+        elif 'tiktok' in url or 'tiktokcdn' in url or 'tikwm' in url:
+            headers['Referer'] = 'https://www.tiktok.com/'
+
+        with requests.get(url, stream=True, timeout=30, headers=headers) as r:
             r.raise_for_status()
             total_size = int(r.headers.get('content-length', 0))
             downloaded = 0
@@ -196,6 +200,72 @@ def _download_instagram_instaloader(
         return None
 
 
+def _download_tiktok_tikwm(
+    url: str,
+    output_id: str,
+    progress_callback: Optional[Callable[[int, str], None]] = None
+) -> Optional[Dict[str, Any]]:
+    """TikWM API orqali TikTok video/rasmlarini yuklab olish (Server IP bloklariga 100% chidamli)"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+        }
+        res = requests.post(
+            'https://www.tikwm.com/api/',
+            data={'url': url, 'count': 12, 'cursor': 0, 'web': 1, 'hd': 1},
+            headers=headers,
+            timeout=25
+        )
+        if res.status_code != 200:
+            return None
+        data = res.json()
+        if data.get('code') != 0 or 'data' not in data:
+            return None
+
+        item_data = data['data']
+        raw_title = item_data.get('title') or 'TikTok Video'
+        title = raw_title.strip()
+        if len(title) > 90:
+            title = title[:87] + "..."
+        uploader = item_data.get('author', {}).get('nickname') or item_data.get('author', {}).get('unique_id') or 'TikTok'
+        duration = float(item_data.get('duration', 0.0))
+
+        items: List[Dict[str, Any]] = []
+
+        # 1. Rasm slaydlari (agar mavjud bo'lsa)
+        images = item_data.get('images')
+        if images and isinstance(images, list):
+            for idx, img_url in enumerate(images, 1):
+                dest = DOWNLOADS_DIR / f"{output_id}_{idx:02d}.jpg"
+                if _download_stream_file(img_url, dest, progress_callback):
+                    items.append({'file_path': str(dest), 'is_video': False, 'ext': '.jpg'})
+        else:
+            # 2. Video (HD yoki standart watermarksiz)
+            play_url = item_data.get('hdplay') or item_data.get('play') or item_data.get('wmplay')
+            if play_url:
+                if not play_url.startswith('http'):
+                    play_url = 'https://www.tikwm.com' + play_url
+                dest = DOWNLOADS_DIR / f"{output_id}_01.mp4"
+                if _download_stream_file(play_url, dest, progress_callback):
+                    items.append({'file_path': str(dest), 'is_video': True, 'ext': '.mp4'})
+
+        if not items:
+            return None
+
+        return {
+            'items': items,
+            'title': title,
+            'uploader': uploader,
+            'duration': duration,
+            'platform': 'tiktok',
+            'source_url': url
+        }
+    except Exception as e:
+        logger.warning(f"TikWM orqali TikTok yuklashda xatolik ({url}): {e}")
+        return None
+
+
 def _download_media_ytdlp(
     url: str,
     output_id: str,
@@ -231,6 +301,12 @@ def _download_media_ytdlp(
         'socket_timeout': 30,
         'ffmpeg_location': FFMPEG_PATH,
         'progress_hooks': [ydl_hook] if progress_callback else [],
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios', 'web_safari', 'mweb'],
+                'player_skip': ['webpage', 'configs'],
+            }
+        },
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
             'Accept-Language': 'en-US,en;q=0.9',
@@ -304,8 +380,23 @@ def _download_media_sync(
     platform: str,
     progress_callback: Optional[Callable[[int, str], None]] = None
 ) -> Optional[Dict[str, Any]]:
-    """Sinxron yuklash funksiyasi (Instagram uchun multi-engine, YouTube va TikTok uchun yt-dlp)"""
-    if platform == "instagram":
+    """Sinxron yuklash funksiyasi (TikTok uchun TikWM, Instagram uchun multi-engine, YouTube uchun yt-dlp)"""
+    if platform == "tiktok":
+        # 1-qadam: TikWM API orqali (serverlar uchun ultra-tez va IP blocksiz)
+        logger.info(f"TikTok: TikWM orqali yuklanmoqda ({url})...")
+        res_tt = _download_tiktok_tikwm(url, output_id, progress_callback)
+        if res_tt and res_tt.get('items'):
+            return res_tt
+
+        # 2-qadam: yt-dlp orqali urinib ko'rish
+        logger.info(f"TikTok: yt-dlp orqali urinib ko'rilmoqda ({url})...")
+        res_yt = _download_media_ytdlp(url, output_id, platform, progress_callback)
+        if res_yt and res_yt.get('items'):
+            return res_yt
+
+        return None
+
+    elif platform == "instagram":
         # 1-qadam: Instaloader orqali urinib ko'rish (Serverlar uchun eng ishonchli)
         shortcode = extract_instagram_shortcode(url)
         if shortcode:
@@ -322,8 +413,9 @@ def _download_media_sync(
 
         return None
     else:
-        # YouTube va TikTok uchun
+        # YouTube uchun
         return _download_media_ytdlp(url, output_id, platform, progress_callback)
+
 
 
 async def download_media(

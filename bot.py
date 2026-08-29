@@ -106,15 +106,15 @@ async def cmd_start(message: types.Message):
     """Start buyrug'i (/start yoki !start)"""
     text = (
         "👋 <b>Assalomu alaykum!</b>\n\n"
-        "Men <b>Instagram</b>, <b>YouTube (Shorts/Video)</b> va <b>TikTok</b> dan videolarni eng yuqori sifatda yuklab, "
-        "ularni <b>1:1 to'rtburchak (kvadrat)</b> shaklga o'tkazuvchi va <b>asl musiqasini (MP3)</b> ajratib beruvchi botman! 🎥📐🎵✨\n\n"
+        "Men <b>Instagram (Reels, Post, Karusel, Stories)</b> dan videolarni eng yuqori sifatda yuklab, "
+        "ularni <b>1:1 to'rtburchak (kvadrat)</b> shaklga o'tkazuvchi va <b>to'liq HQ MP3 musiqasini</b> topib beruvchi botman! 📸📐🎵✨\n\n"
         "🌟 <b>Asosiy Imkoniyatlar:</b>\n"
-        "1️⃣ <b>Instagram, YouTube, TikTok</b> havolalarini yuboring.\n"
+        "1️⃣ <b>Instagram</b> havolasini yuboring (Reels, Post, Stories).\n"
         "2️⃣ Video avtomatik tarzda <b>1:1 to'rtburchak (Blur fon)</b> shakliga keltiriladi.\n"
-        "3️⃣ <b>🎵 Musiqasi (MP3)</b> — videodagi asl musiqani toza HQ MP3 formatida ajratib beradi.\n"
+        "3️⃣ <b>🎵 Musiqasi (MP3)</b> — videodagi musiqaning to'liq original MP3 formatini topib beradi.\n"
         "4️⃣ <b>✂️ Qirqish (Crop)</b> yoki <b>🎞 Asl holatda</b> formatlarini ham tanlash mumkin.\n"
         "5️⃣ Istalgan video yoki rasmni to'g'ridan-to'g'ri yuborsangiz ham 1:1 kvadrat qilib beradi.\n\n"
-        "🚀 <i>Havolani yuboring yoki video/rasm tashlang!</i>"
+        "🚀 <i>Instagram havolasini yuboring yoki video/rasm tashlang!</i>"
     )
     await message.answer(text, parse_mode=ParseMode.HTML)
 
@@ -125,39 +125,36 @@ async def cmd_help(message: types.Message):
     """Yordam buyrug'i (/help yoki !help)"""
     text = (
         "ℹ️ <b>Yordam va qo'llanma:</b>\n\n"
-        "🔹 <b>Qo'llab-quvvatlanadigan platformalar:</b>\n"
+        "🔹 <b>Qo'llab-quvvatlanadigan formatlar:</b>\n"
         "• 📸 <b>Instagram:</b> Reels, Post, Karusel, Stories\n"
-        "• 🔴 <b>YouTube:</b> Shorts, oddiy videolar (youtu.be / watch)\n"
-        "• 🎵 <b>TikTok:</b> Barcha video havolalar\n"
         "• 📁 <b>To'g'ridan-to'g'ri media:</b> Botga yuborilgan har qanday video yoki rasm\n\n"
-        "📐 <b>Formatlar:</b>\n"
-        "• <b>📐 Blur fon:</b> 1:1 kvadrat, videoning asl sifati va nisbati buzilmaydi, chetiga chiroyli xiralashtirilgan fon qo'yiladi.\n"
+        "📐 <b>Tugmalar va formatlar:</b>\n"
+        "• <b>📐 Blur fon:</b> 1:1 kvadrat, videoning asl sifati buzilmaydi, chetiga chiroyli xiralashtirilgan fon qo'yiladi.\n"
         "• <b>✂️ Qirqish (Crop):</b> Markazidan 1:1 kvadrat qilib qirqib beradi.\n"
         "• <b>🎞 Asl holatda:</b> O'zgartirishlarsiz asl formatda beradi.\n"
-        "• <b>🎵 To'liq MP3:</b> Qo'shiqni to'liq holda topib yuklaydi."
+        "• <b>🎵 Musiqasi (MP3):</b> Qo'shiqni to'liq holda topib yuklaydi."
     )
     await message.answer(text, parse_mode=ParseMode.HTML)
 
 
 @dp.message(F.text)
 async def handle_text_message(message: types.Message, bot: Bot):
-    """Instagram yoki YouTube havolasini qabul qilish va qayta ishlash"""
+    """Instagram havolasini qabul qilish va qayta ishlash"""
     text = message.text.strip()
     detected = detect_supported_url(text)
 
     if not detected:
         await message.answer(
-            "⚠️ Iltimos, to'g'ri <b>Instagram</b>, <b>YouTube</b> yoki <b>TikTok</b> havolasini yuboring.\n\n"
+            "⚠️ Iltimos, to'g'ri <b>Instagram</b> havolasini yuboring.\n\n"
             "Misollar:\n"
             "• <code>https://www.instagram.com/reel/Cxxxxxx/</code>\n"
-            "• <code>https://youtube.com/shorts/xxxxxx</code>\n"
-            "• <code>https://youtu.be/xxxxxx</code>",
+            "• <code>https://www.instagram.com/p/Cxxxxxx/</code>",
             parse_mode=ParseMode.HTML
         )
         return
 
     platform, url = detected
-    platform_name = "YouTube" if "youtube" in platform else ("TikTok" if platform == "tiktok" else "Instagram")
+    platform_name = "Instagram"
     status_msg = await message.answer(f"⏳ <b>{platform_name} dan yuklab olinmoqda...</b>", parse_mode=ParseMode.HTML)
 
     loop = asyncio.get_running_loop()
